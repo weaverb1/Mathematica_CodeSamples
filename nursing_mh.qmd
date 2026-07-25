@@ -1,0 +1,894 @@
+---
+title: "Nursing Mental Health"
+format:
+  html:
+    toc: true
+    code-fold: true
+    code-tools: true 
+    embed-resources: true
+editor: visual
+---
+
+```{r}
+#| message: false
+#| warning: false
+#libraries
+library(readxl)
+library(tidyverse)
+library(viridis) 
+library(pander)
+library(emmeans)
+```
+
+```{r}
+data_excel <- read_excel("~/Consulting Center/Nursing Mental Health/Mental Health in Undergraduate Nursing Students_April 6, 2025_10.29.xlsx", 
+    sheet = "Raw") |>
+  slice(-1) |>
+  filter(row_number() != 101 & row_number() != 198) |>
+  rename(Semester = Q2, phq = `PHQ Total Scores`, gad = `GAD Total Scores`)
+#View(data)
+
+data <- data_excel
+```
+
+# Calculating phq and gad scores
+
+```{r}
+scores <- function(column, data) {
+  data <- data |> mutate(
+    !!paste0(rlang::as_name(enquo(column)), "_value") := case_when(
+      {{ column }} == "Not at all" ~ 0,
+      {{ column }} == "Several days" ~ 1,
+      {{ column }} == "More than half the days" ~ 2,
+      {{ column }} == "Nearly everyday" ~ 3,
+      is.na({{ column }}) ~ 0
+    )
+  )
+
+  return(data)
+}
+
+data <- scores(Q3_1, data)
+data <- scores(Q3_2, data)
+data <- scores(Q3_3, data)
+data <- scores(Q3_4, data)
+data <- scores(Q3_5, data)
+data <- scores(Q3_6, data)
+data <- scores(Q3_7, data)
+data <- scores(Q3_8, data)
+data <- scores(Q3_9, data)
+
+data <- scores(Q5_1, data)
+data <- scores(Q5_2, data)
+data <- scores(Q5_3, data)
+data <- scores(Q5_4, data)
+data <- scores(Q5_5, data)
+data <- scores(Q5_6, data)
+data <- scores(Q5_7, data)
+
+data_scores <- data |> mutate(phq = Q3_1_value + Q3_2_value + Q3_3_value + Q3_4_value + Q3_5_value + Q3_6_value + Q3_7_value + Q3_8_value + Q3_9_value, gad = Q5_1_value + Q5_2_value + Q5_3_value + Q5_4_value + Q5_5_value + Q5_6_value + Q5_7_value)
+
+data_scores <- data_scores %>%
+  mutate(Semester = str_squish(str_replace_all(Semester, "[\\r\\n]", "")), Semester = factor(Semester, levels = c("1", "2", "3", "4","5","6")))
+
+# data_scores %>%
+#   summarise(across(everything(), ~ sum(is.na(.))))
+
+not_official_responses <- c(
+  "none", "None", "N/A", "No resources",
+  "Nothing. Probably need to get something though because this semester has gotten me so stressed my throat closes up almost everyday when I get to class.", "None.",
+ "N/a",
+  "Deep breathing when I realized how stressed I am. Attempt to find a distracting activity", "None current, but previously therapy at several intervals"
+)
+
+byu_resources <- c("SHC perscribed Wellbutrin", "Psychiatric NP and meds, therapist, meditation on CAPs website, church/temple.", "CAPS", "BYU CAPS", "BYU CAP resources", "	
+CAPS and community therapist and family provider", "Caps", "The BYU comprehensive clinic", "Signed up for CAPS but have not had my appointment yet", "- CAPS group therapy for anxiety\r\n- individual therapist off and on", "On the waitlist for CAPS!", "CAPS and community therapist and family provider")
+
+
+full_data <- data_scores |>
+  mutate(shaded_count = rowSums(across(Q3_1_value:Q3_8_value, ~ .x %in% 2:3)),
+         shaded_count = ifelse(Q3_9_value > 0, shaded_count + 1, shaded_count),
+         core_symptom_check = (Q3_1_value %in% 2:3) | (Q3_2_value %in% 2:3),
+         probable_depression = ifelse(shaded_count >= 2 & core_symptom_check, 1, 0)
+         ) |>
+  mutate(depression_type = case_when(
+           phq < 5 ~ "Minimal",
+           phq < 10 ~ "Mild",
+           phq < 15 ~ "Moderate",
+           phq >= 15 ~ "Severe"
+         )) |>
+    # mutate(depression_type = case_when(
+    #        phq < 5 ~ "Minimal",
+    #        phq < 10 ~ "Mild",
+    #        phq < 15 ~ "Moderate",
+    #        phq < 20 ~ "Moderately Severe",
+    #        phq >=20 ~ "Severe"
+    #      )) |>
+  mutate(severe_anxiety = ifelse(gad >= 15, 1, 0),
+         anxiety_type = case_when(
+           gad < 5 ~ "Minimal",
+           gad < 10 ~ "Mild",
+           gad < 15 ~ "Moderate",
+           gad >=15 ~ "Severe"
+         )) |>
+  mutate(used_resource = ifelse(is.na(Q7) | Q7 %in% not_official_responses, 0, 1)) |>
+  mutate(byu_resource = ifelse(Q7 %in% byu_resources, 1, 0)) |>
+  select(Semester:phq, probable_depression, depression_type, Q5_1:gad, severe_anxiety, anxiety_type, Q7, used_resource, byu_resource) |>
+  arrange(Semester) |>
+  mutate(non_byu_resources = ifelse(used_resource == 1 & byu_resource == 0, 1, 0)) |>
+  mutate(non_byu_resources = ifelse(Q7 %in% c("Psychiatric NP and meds, therapist, meditation on CAPs website, church/temple.","CAPS and community therapist and family provider"), 1, non_byu_resources))
+  
+# check <- full_data |> select(Semester, Q7, used_resource, byu_resource) |>
+#   rename(all_resources = used_resource, byu_resources = byu_resource) |>
+#   mutate(non_byu_resources = ifelse(all_resources == 1 & byu_resources == 0, 1, 0)) |>
+#   mutate(non_byu_resources = ifelse(Q7 %in% c("Psychiatric NP and meds, therapist, meditation on CAPs website, church/temple.","CAPS and community therapist and family provider"), 1, non_byu_resources))
+# 
+# write.csv(check, file = "final_resources_check.csv", row.names = FALSE)
+```
+
+```{r}
+# resources_check_csv <- read_excel("C:/Users/weave/Downloads/resources_check.csv.xlsx")
+# View(resources_check_csv)
+# 
+# check1 <- check |> mutate(change = ifelse(byu_resource == resources_check_csv$byu_resource, "True", "False"))
+# View(check1)
+```
+
+# Regression Models:
+
+```{r}
+ggplot(data_scores, aes(Semester, phq)) +
+  geom_point(pch = 21) +
+  labs(title = "PHQ", x = "Semester", y = "PHQ Score") +
+  theme_minimal()
+
+lm1 <- lm(phq ~ Semester, data = data_scores)
+summary(lm1)
+
+em <- emmeans(lm1, "Semester")
+pairs(em, adjust = "tukey")
+
+plot(em, comparisons = TRUE)
+
+
+# lm2 <- lm(phq ~ 0 + Semester, data = data_scores)
+# summary(lm2)
+```
+
+Interpretation:
+
+Like with the original results, semester 2, 5, and 6 have high p-values, which means there is not suffiecient evidence to suggest that those semesters are significantly different than those in the first semester. Semester 4 has a p-value less than 0.05, which means there is sufficient evidence that PHQ scores are significantly different in Semester 4 compared to Semester 1. Semester 3 has a p-value that is on the border of a few different significance levels. This means that there is some evidence to suggest that Semester 3 is significantly different from Semester 1, but it depends on where we decide to draw the line in the sand on what is significant or not. From this, we can still follow the conclusion that was drawn with the original results, but with a weaker argument for how different Semester 3 is from Semester 1. This gives more credit to the possibility that there are outliers in our data that are inflating Semester 3's results.
+
+```{r}
+ggplot(data_scores, aes(Semester, gad)) +
+  geom_point(pch = 21) +
+  labs(title = "GAD", x = "Semester", y = "GAD Score") +
+  theme_minimal()
+
+lm3 <- lm(gad ~ Semester, data = data_scores)
+summary(lm3)
+
+em <- emmeans(lm3, "Semester")
+pairs(em, adjust = "tukey")
+
+plot(em, comparisons = TRUE)
+
+# lm4 <- lm(gad ~ 0 + Semester, data = data_scores)
+# summary(lm4)
+```
+
+Interpretation:
+
+The results from this test lead to the same conslusions as the original results. Semester 4 and 5 have low enough p-values to suggest that there is sufficient evidence to suggest that there is a significant difference between those semesters and semester 1. This suggests that anxiety is generally lower in Semesters 4 and 5 compared to Semester 1.
+
+# Generalized Model - Depressed v Not Depressed; Anxious v Not Anxious:
+
+## Depressed
+
+```{r}
+depressed <- data_scores |>
+  select(Semester:phq, Q3_1_value:Q3_9_value) |>
+  mutate(shaded_count = rowSums(across(Q3_1_value:Q3_8_value, ~ .x %in% 2:3)),
+         shaded_count = ifelse(Q3_9_value > 0, shaded_count + 1, shaded_count),
+         core_symptom_check = (Q3_1_value %in% 2:3) | (Q3_2_value %in% 2:3),
+         probable_depression = ifelse(shaded_count >= 2 & core_symptom_check, 1, 0)
+         )
+
+glm1 <- glm(probable_depression ~ Semester, data = depressed, family = "binomial")
+summary(glm1)
+
+depressed_pct <- depressed %>%
+  group_by(Semester) %>%
+  summarise(
+    n_total = n(),
+    n_depressed = sum(probable_depression == TRUE, na.rm = TRUE),
+    percent_depressed = n_depressed / n_total
+  )
+
+ggplot(depressed_pct, aes(Semester, percent_depressed)) +
+  geom_col(fill = "deepskyblue") +
+  labs(title = "% Depression: Major and Other Depressive Disorder") +
+  theme_minimal()
+
+#no significance in pairwise comparisons
+
+em <- emmeans(glm1, "Semester")
+
+pairs(em, adjust = "tukey")
+
+# depressed <- data_scores |>
+#   select(Semester:phq, Q3_1_value:Q3_9_value) |>
+#   mutate(shaded_count = rowSums(across(Q3_1_value:Q3_8_value, ~ .x %in% 2:3)),
+#          shaded_count = ifelse(Q3_9_value > 0, shaded_count + 1, shaded_count),
+#          core_symptom_check = (Q3_1_value %in% 2:3) | (Q3_2_value %in% 2:3),
+#          maj_depression = ifelse(shaded_count >= 5 & core_symptom_check, 1, 0)
+#          )
+# 
+# glm1 <- glm(maj_depression ~ Semester, data = depressed)
+# summary(glm1)
+# 
+# depressed_pct <- depressed %>%
+#   group_by(Semester) %>%
+#   summarise(
+#     n_total = n(),
+#     n_depressed = sum(maj_depression == TRUE, na.rm = TRUE),
+#     percent_depressed = n_depressed / n_total
+#   )
+# 
+# ggplot(depressed_pct, aes(Semester, percent_depressed)) +
+#   geom_col(fill = "deepskyblue") +
+#   labs(title = "% Depression: Major Depressive Disorder") +
+#   theme_minimal()
+# 
+# 
+# depressed <- data_scores |>
+#   select(Semester:phq, Q3_1_value:Q3_9_value) |>
+#   mutate(shaded_count = rowSums(across(Q3_1_value:Q3_8_value, ~ .x %in% 2:3)),
+#          shaded_count = ifelse(Q3_9_value > 0, shaded_count + 1, shaded_count),
+#          core_symptom_check = (Q3_1_value %in% 2:3) | (Q3_2_value %in% 2:3),
+#          other_depression = ifelse(shaded_count >= 2 & shaded_count <=4 & core_symptom_check, 1, 0)
+#          )
+# 
+# glm1 <- glm(other_depression ~ Semester, data = depressed)
+# summary(glm1)
+# 
+# depressed_pct <- depressed %>%
+#   group_by(Semester) %>%
+#   summarise(
+#     n_total = n(),
+#     n_depressed = sum(other_depression == TRUE, na.rm = TRUE),
+#     percent_depressed = n_depressed / n_total
+#   )
+# 
+# ggplot(depressed_pct, aes(Semester, percent_depressed)) +
+#   geom_col(fill = "deepskyblue") +
+#   labs(title = "% Depression: Other Depressive Disorder") +
+#   theme_minimal()
+# 
+# depressed <- data_scores |>
+#   select(Semester:phq, Q3_1_value:Q3_9_value) |>
+#   mutate(depression = ifelse(phq >= 15, 1, 0))
+# 
+# glm1 <- glm(depression ~ Semester, data = depressed)
+# summary(glm1)
+# 
+# depressed_pct <- depressed %>%
+#   group_by(Semester) %>%
+#   summarise(
+#     n_total = n(),
+#     n_depressed = sum(depression == TRUE, na.rm = TRUE),
+#     percent_depressed = n_depressed / n_total
+#   )
+# 
+# ggplot(depressed_pct, aes(Semester, percent_depressed)) +
+#   geom_col(fill = "deepskyblue") +
+#   labs(title = "% Depression: PHQ Score >= 15") +
+#   theme_minimal()
+# 
+# depressed <- data_scores |>
+#   select(Semester:phq, Q3_1_value:Q3_9_value) |>
+#   mutate(depression = ifelse(phq >= 20, 1, 0))
+# 
+# glm1 <- glm(depression ~ Semester, data = depressed)
+# summary(glm1)
+# 
+# depressed_pct <- depressed %>%
+#   group_by(Semester) %>%
+#   summarise(
+#     n_total = n(),
+#     n_depressed = sum(depression == TRUE, na.rm = TRUE),
+#     percent_depressed = n_depressed / n_total
+#   )
+# 
+# ggplot(depressed_pct, aes(Semester, percent_depressed)) +
+#   geom_col(fill = "deepskyblue") +
+#   labs(title = "% Depression: PHQ Score >= 20") +
+#   theme_minimal()
+```
+
+This model and graph defines someone with depression when there are at least 2 checks in the shaded section, with at least one of them being Question 1 or 2. Like with the original results, there is not sufficient evidence that Semester has a significant relationship with depression. This is further confirmed with the second test, which has no significance anywhere.
+
+## Anxious
+
+```{r}
+anxiety <- data_scores |>
+  select(Semester, Q5_1:gad, Q5_1_value:Q5_7_value) |>
+  mutate(severe_anxiety = ifelse(gad >= 15, 1, 0),
+         anxiety_type = case_when(
+           gad < 5 ~ "Minimal",
+           gad < 10 ~ "Mild",
+           gad < 15 ~ "Moderate",
+           gad >=15 ~ "Severe"
+         ))
+
+glm2 <- glm(severe_anxiety ~ Semester, data = anxiety, , family = "binomial")
+summary(glm2)
+
+anxiety_pct <- anxiety %>%
+  group_by(Semester) %>%
+  summarise(
+    n_total = n(),
+    n_anxiety = sum(severe_anxiety == TRUE, na.rm = TRUE),
+    percent_anxiety = n_anxiety / n_total
+  )
+
+ggplot(anxiety_pct, aes(Semester, percent_anxiety)) +
+  geom_col(fill = "deepskyblue") +
+  labs(title = "% Anxiety") +
+  theme_minimal()
+
+em <- emmeans(glm2, "Semester")
+
+pairs(em, adjust = "tukey")
+
+```
+
+If we were to use a significance level of 0.1 instead of the more common 0.05, we would have evidence that there is less anxiety for Semesters 2, 4, and 5. Because we have such small samples of people with severe anxiety, this may be appropriate, but is something we should discuss as there are some cons of using a larger significance level. This is again a test that can point to some potentially interesting finding, but requires more testing to confirm any firm conclusions.
+
+# Confidence Intervals:
+
+```{r}
+anxiety_stuff <- anxiety |>
+  group_by(anxiety_type) |>
+  summarise(count = n(), pro = count/nrow(anxiety), per = pro * 100)
+```
+
+```{r}
+ggplot(anxiety_stuff, aes(x = "", y = pro, fill = anxiety_type)) +
+  geom_col(width = 1, color = "white") +  
+  coord_polar(theta = "y") +
+  labs(
+    title = "Anxiety Severity",
+    fill = NULL,
+    x = NULL,
+    y = NULL
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16), 
+    legend.position = "bottom",                 
+    axis.text = element_blank(),                        
+    axis.ticks = element_blank(),
+    panel.grid = element_blank()
+  ) +
+  scale_fill_viridis_d()  
+
+```
+
+```{r}
+pander(anxiety_stuff)
+
+a_ci <- binom.test(16, 196)
+#a_ci$conf.int[1]
+#print("95% Confidence Interval for Severe Anxiety")
+
+```
+
+##### 95% Confidence Interval for Severe Anxiety
+
+```{r}
+paste0("(", round(a_ci$conf.int[1] * 100,2), ", ", round(a_ci$conf.int[2] * 100,2),")%")
+```
+
+```{r}
+depression_stuff <- depressed |>
+  mutate(depression_type = case_when(
+           phq < 5 ~ "Minimal",
+           phq < 10 ~ "Mild",
+           phq < 15 ~ "Moderate",
+           phq >=15 ~ "Severe"
+         )) |>
+  group_by(depression_type) |>
+  summarise(count = n(), proportion = count/nrow(depressed), percent = proportion * 100)
+  
+
+```
+
+```{r}
+ggplot(depression_stuff, aes(x = "", y = proportion, fill = depression_type)) +
+  geom_col(width = 1, color = "white") +  
+  coord_polar(theta = "y") +
+  labs(
+    title = "Depression Severity",
+    fill = NULL,
+    x = NULL,
+    y = NULL
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16), 
+    legend.position = "bottom",                 
+    axis.text = element_blank(),                        
+    axis.ticks = element_blank(),
+    panel.grid = element_blank()
+  ) +
+  scale_fill_viridis_d()  
+
+```
+
+```{r}
+pander(depression_stuff)
+
+d_ci <- binom.test(1, 196)
+#a_ci$conf.int[1]
+#print("95% Confidence Interval for Severe Depression")
+
+```
+
+##### 95% Confidence Interval for Severe Depression
+
+```{r}
+paste0("(", round(d_ci$conf.int[1] * 100,2), ", ", round(d_ci$conf.int[2] * 100,2),")%")
+```
+
+# Resource Utilization
+
+## We want to measure what percentage of students that are indicative of anxiety are using resources in general and using BYU specific resources (CAPS or wellness center).
+
+### Anxiety Severity Types
+
+The table and graph below represent the same information. They give an overview for who uses which resources more based on Anxiety levels.
+
+```{r}
+anx_resources <- full_data |>
+  group_by(anxiety_type) |>
+  summarise(
+    general_resources = mean(used_resource, na.rm = TRUE) * 100,
+    byu_resources = mean(byu_resource, na.rm = TRUE) * 100,
+    non_byu_resources = mean(non_byu_resources, na.rm = TRUE) * 100,
+    n = n()
+  )
+
+table <- anx_resources |> 
+  rename(`Anxiety Severity` = anxiety_type, `All Resources` = general_resources, `BYU Resources` = byu_resources, `Non-BYU Resources` = non_byu_resources)
+
+pander(table)
+
+```
+
+```{r}
+anx_graph <- anx_resources |>
+  select(-n) |>
+  pivot_longer(cols = c("general_resources", "byu_resources", "non_byu_resources"),
+               names_to = "resource",
+               values_to = "percent") |>
+  mutate(resource = ifelse(resource == "byu_resources", "BYU", resource)) |>
+  mutate(resource = ifelse(resource == "non_byu_resources", "Non-BYU", resource)) |>
+  mutate(resource = ifelse(resource == "general_resources", "All", resource))
+
+ggplot(anx_graph, aes(anxiety_type, percent, fill = resource)) +
+  geom_col(position = "dodge") +
+  labs(title = "Percent of students that use Resources for each Anxiety Severity",
+       x = "Anxiety Severity",
+       y = "Percent %",
+       fill = "Resource Type") +
+  theme_minimal()
+```
+
+It is interesting to note that though resource usage seems to increase as Anxiety Severity increases, there is a dip in who uses the resources in the minimal group. To check if this was significant I ran the below test.
+
+#### Chi-squared Test Results
+
+###### All Resources
+
+```{r}
+x <- table(full_data$anxiety_type, full_data$used_resource)
+
+test <- chisq.test(x, simulate.p.value = TRUE)
+# test$expected
+paste("P-value:", round(test$p.value, 3))
+pander(test$residuals, caption = "Pearson Residuals")
+```
+
+A chi-squared test checks to see if two variables are independent of eachother by comparing what values we would expect to see if there was no relationship with what we actually observe. In the above results we check to see if anxiety severity has a relationship with all resources. The p-value is too high, indicating that there is insufficient evidence that anxiety severity and all resources used are not independent of eachother. Had the results been significant, we would look at the Pearson Residuals to indicate how strong the relationship is between certain categories. The further from 0 a residual is, the stronger the relationship.
+
+###### BYU Resources
+
+```{r}
+x <- table(full_data$anxiety_type, full_data$byu_resource)
+
+test <- chisq.test(x, simulate.p.value = TRUE)
+# test$expected
+paste("P-value:", round(test$p.value, 3))
+pander(test$residuals, caption = "Pearson Residuals")
+```
+
+<!-- This is not necessarily the case for BYU resources. The p-value is too high to conclude that there is a relationship between the two, but this might have to do with the fact we have a much smaller sample size. -->
+
+This trend continues when we just look at BYU resources (test results above) and non-BYU resources (test results below). The p-values are to high to conclude that there is a signifcant relationship between anxiety type and use of resources.
+
+###### Non-BYU Resources
+
+```{r}
+x <- table(full_data$anxiety_type, full_data$non_byu_resources)
+
+test <- chisq.test(x, simulate.p.value = TRUE)
+# test$expected
+paste("P-value:", round(test$p.value, 3))
+pander(test$residuals, caption = "Pearson Residuals")
+```
+
+### Severe Anxiety
+
+This graph and table is the same as the first ones, but now categorize everyone based on whether or not they have severe anxiety.
+
+```{r}
+anx_resources <- full_data |>
+  group_by(severe_anxiety) |>
+  summarise(
+    general_resources = mean(used_resource, na.rm = TRUE) * 100,
+    byu_resources = mean(byu_resource, na.rm = TRUE) * 100,
+    non_byu_resources = mean(non_byu_resources, na.rm = TRUE) * 100,
+    n = n()
+  )
+
+table <- anx_resources |> 
+  mutate(severe_anxiety = ifelse(severe_anxiety == 1, "True", "False")) |>
+  rename(`Severe Anxiety` = severe_anxiety, `All Resources` = general_resources, `BYU Resources` = byu_resources, `Non-BYU Resources` = non_byu_resources)
+
+pander(table)
+```
+
+```{r}
+anx_graph <- anx_resources |>
+  select(-n) |>
+  pivot_longer(cols = c("general_resources", "byu_resources", "non_byu_resources"),
+               names_to = "resource",
+               values_to = "percent") |>
+  mutate(severe_anxiety = ifelse(severe_anxiety == 1, "True", "False")) |>
+  mutate(resource = ifelse(resource == "byu_resources", "BYU", resource)) |>
+  mutate(resource = ifelse(resource == "non_byu_resources", "Non-BYU", resource)) |>
+  mutate(resource = ifelse(resource == "general_resources", "All", resource))
+
+
+ggplot(anx_graph, aes(severe_anxiety, percent, fill = resource)) +
+  geom_col(position = "dodge") +
+  labs(title = "Percent of students that use Resources with and without Severe Anxiety",
+       x = "Severe Anxiety",
+       y = "Percent %",
+       fill = "Resource Type") +
+  theme_minimal()
+```
+
+#### Fisher's and Chi-squared test results
+
+###### All Resources
+
+```{r}
+x <- table(full_data$severe_anxiety, full_data$used_resource)
+
+test <- chisq.test(x)
+#summary(test)
+
+# test <- fisher.test(full_data$severe_anxiety, full_data$used_resource, simulate.p.value = TRUE, B = 100000)
+
+paste("P-value:", round(test$p.value, 3))
+
+test$residuals
+```
+
+Above if the p-value for testing if there is a relationship between whether having severe anxiety or not and using either BYU or non-BYU resources. This p-value is on the border of whether we would consider there to be sufficient evidence that people are more likely to use general resources with severe anxiety than without.
+
+###### BYU Resources
+
+```{r}
+# x <- table(full_data$severe_anxiety, full_data$byu_resource)
+# 
+# test <- chisq.test(x)
+# test$expected
+
+test <- fisher.test(full_data$severe_anxiety, full_data$byu_resource, simulate.p.value = TRUE, B = 100000)
+
+paste("P-value:", round(test$p.value, 3))
+```
+
+This test checks for the same thing, but looks at BYU specific resources instead. This p-value is a perfect 1 and therefore leaves us with the conclusion that there is not sufficient evidence that there is a significant difference between having severe anxiety and using BYU resources.
+
+###### Non-BYU Resources
+
+```{r}
+x <- table(full_data$severe_anxiety, full_data$non_byu_resources)
+
+test <- chisq.test(x)
+#test$expected
+
+# test <- fisher.test(full_data$severe_anxiety, full_data$non_byu_resources, simulate.p.value = TRUE, B = 100000)
+
+paste("P-value:", round(test$p.value, 3))
+
+test$residuals
+```
+
+This p-value is also on the border of significance. This most likely means that there could be a relationship between using resources and having severe anxiety, but we would need more data to show a strong relationship between the two.
+
+## We want to repeat those steps for students indicative of depression. We also want to look at what percentage of students that are NOT considered depressed are using resources for depression same as above but BYU specific resources
+
+### Depression Severity Type
+
+These tables and graphs are the same as for anxiety, but are now for depression.
+
+```{r}
+dep_resources <- full_data |>
+  group_by(depression_type) |>
+  summarise(
+    general_resources = mean(used_resource, na.rm = TRUE) * 100,
+    byu_resources = mean(byu_resource, na.rm = TRUE) * 100,
+    non_byu_resources = mean(non_byu_resources, na.rm = TRUE) * 100,
+    n = n()
+  )
+
+table <- dep_resources |> 
+  rename(`Depression Severity` = depression_type, `All Resources` = general_resources, `BYU Resources` = byu_resources, `Non-BYU Resources` = non_byu_resources)
+
+pander(table)
+```
+
+```{r}
+dep_graph <- dep_resources |>
+  select(-n) |>
+  pivot_longer(cols = c("general_resources", "byu_resources", "non_byu_resources"),
+               names_to = "resource",
+               values_to = "percent") |>
+  mutate(resource = ifelse(resource == "byu_resources", "BYU", resource)) |>
+  mutate(resource = ifelse(resource == "non_byu_resources", "Non-BYU", resource)) |>
+  mutate(resource = ifelse(resource == "general_resources", "All", resource))
+
+ggplot(dep_graph, aes(depression_type, percent, fill = resource)) +
+  geom_col(position = "dodge") +
+  labs(title = "Percent of students that use Resources for each Depression Severity",
+       x = "Depression Severity",
+       y = "Percent %",
+       fill = "Resource Type") +
+  theme_minimal()
+```
+
+These new graphs and test have moderately severe and severe depression grouped together as depressed.
+
+#### Chi-squared Test Results
+
+###### All Resources
+
+```{r}
+x <- table(full_data$depression_type, full_data$used_resource)
+
+test <- chisq.test(x, simulate.p.value = TRUE)
+# test$expected
+paste("P-value:", round(test$p.value, 3))
+pander(test$residuals, caption = "Pearson Residuals")
+```
+
+This test compares depression severity and the use of all resources. We do have a significant p-value for this test, and now because we combined the two categories, we meet the assumptions of this test. The main result of this test is that those with Minimal Depression tend to use resources far less than expected.
+
+###### BYU Resources
+
+```{r}
+x <- table(full_data$depression_type, full_data$byu_resource)
+
+test <- chisq.test(x, simulate.p.value = TRUE)
+# test$expected
+paste("P-value:", round(test$p.value, 3))
+pander(test$residuals, caption = "Pearson Residuals")
+```
+
+This test is for BYU specific resources. It does not have a significant p-value, but also does not quite meet all the test assumptions.
+
+###### Non-BYU Resources
+
+```{r}
+x <- table(full_data$depression_type, full_data$non_byu_resources)
+
+test <- chisq.test(x, simulate.p.value = TRUE)
+# test$expected
+paste("P-value:", round(test$p.value, 3))
+pander(test$residuals, caption = "Pearson Residuals")
+```
+
+This test for non-BYU specific resources does meet the test assumptions, but does not have a significant p-value.
+
+### Depressed vs Not Depressed
+
+This table and graph defines someone as having depression when there are at least 2 checks in the shaded section, with at least one of them being Question 1 or 2.
+
+```{r}
+dep_resources <- full_data |>
+  group_by(probable_depression) |>
+  summarise(
+    general_resources = mean(used_resource, na.rm = TRUE) * 100,
+    byu_resources = mean(byu_resource, na.rm = TRUE) * 100,
+    non_byu_resources = mean(non_byu_resources, na.rm = TRUE) * 100,
+    n = n()) 
+
+table <- dep_resources |> 
+  mutate(probable_depression = ifelse(probable_depression == 1, "True", "False")) |>
+  rename(Depression = probable_depression, `General Resources` = general_resources, `BYU Resources` = byu_resources)
+
+pander(table)
+```
+
+```{r}
+dep_graph <- dep_resources |>
+  select(-n) |>
+  pivot_longer(cols = c("general_resources", "byu_resources", "non_byu_resources"),
+               names_to = "resource",
+               values_to = "percent") |>
+  mutate(probable_depression = ifelse(probable_depression == 1, "True", "False")) |>
+  mutate(resource = ifelse(resource == "byu_resources", "BYU", resource)) |>
+  mutate(resource = ifelse(resource == "non_byu_resources", "Non-BYU", resource)) |>
+  mutate(resource = ifelse(resource == "general_resources", "All", resource))
+
+ggplot(dep_graph, aes(probable_depression, percent, fill = resource)) +
+  geom_col(position = "dodge") +
+  labs(title = "Percent of students that use Resources with and without Depression",
+       x = "Depression",
+       y = "Percent %",
+       fill = "Resource Type") +
+  theme_minimal()
+```
+
+#### Chi-squared test results
+
+###### All Resources
+
+```{r}
+# test <- fisher.test(full_data$probable_depression, full_data$used_resource, simulate.p.value = TRUE, B = 100000)
+
+x <- table(full_data$probable_depression, full_data$used_resource)
+
+test <- chisq.test(x)
+# test$expected
+test$residuals
+
+paste("P-value:", round(test$p.value, 3))
+```
+
+The p-values for comparing when someone is depressed and using any resource, BYU resource, or non-BYU resource are high, meaning that there is not sufficient evidence that having or not having depression has a significant relationship with using any resources.
+
+###### BYU Resources
+
+```{r}
+# test <- fisher.test(full_data$probable_depression, full_data$byu_resource, simulate.p.value = TRUE, B = 100000)
+
+x <- table(full_data$probable_depression, full_data$byu_resource)
+
+test <- chisq.test(x)
+# test$expected
+test$residuals
+
+paste("P-value:", round(test$p.value, 3))
+```
+
+###### Non-BYU Resources
+
+```{r}
+# test <- fisher.test(full_data$probable_depression, full_data$byu_resource, simulate.p.value = TRUE, B = 100000)
+
+x <- table(full_data$probable_depression, full_data$non_byu_resources)
+
+test <- chisq.test(x)
+ test$expected
+test$residuals
+
+paste("P-value:", round(test$p.value, 3))
+```
+
+# Is there an interaction between Anxiety and Depression and what resources are used?
+
+We will talk more about these results in our meeting, but the main story is that there isn't any significant interaction between Anxiety and Depression in relation to using resources. This is most likely because we just don't have enough data to find significant results. Many of our grouping had no one in them, meaning there was no data to test, leading to insignificant results.
+
+```{r}
+glm3 <- glm(used_resource ~ severe_anxiety * probable_depression, data = full_data, family = "binomial")
+summary(glm3)
+
+drop1(glm3, test = "Chisq")
+
+check <- emmeans(glm3, ~ severe_anxiety * probable_depression, type = "response")
+emmip(check,  probable_depression ~ severe_anxiety)
+
+glm4 <- glm(byu_resource ~ severe_anxiety * probable_depression, data = full_data, family = "binomial")
+summary(glm4)
+
+drop1(glm4, test = "Chisq")
+
+check <- emmeans(glm4, ~ severe_anxiety * probable_depression, type = "response")
+emmip(check,  probable_depression ~ severe_anxiety)
+
+glm5 <- glm(non_byu_resources ~ severe_anxiety * probable_depression, data = full_data, family = "binomial")
+summary(glm5)
+
+drop1(glm5, test = "Chisq")
+
+check <- emmeans(glm5, ~ severe_anxiety * probable_depression, type = "response")
+emmip(check,  probable_depression ~ severe_anxiety)
+
+
+```
+
+```{r}
+# table(full_data$severe_anxiety, full_data$probable_depression, full_data$byu_resource)
+# 
+# full_data$combo <- interaction(full_data$severe_anxiety, full_data$probable_depression)
+# table(full_data$combo, full_data$byu_resource)
+# 
+# library(logistf)
+# logistf(byu_resource ~ severe_anxiety * probable_depression, data = full_data)
+# 
+# full_data %>%
+#   mutate(combo = case_when(
+#     severe_anxiety == 1 & probable_depression == 1 ~ "Both",
+#     severe_anxiety == 1 & probable_depression == 0 ~ "Anxiety Only",
+#     severe_anxiety == 0 & probable_depression == 1 ~ "Depression Only",
+#     TRUE ~ "Neither"
+#   )) %>%
+#   group_by(combo) %>%
+#   summarise(
+#     n = n(),
+#     used_resource = sum(byu_resource),
+#     percent = used_resource / n
+#   ) %>%
+#   ggplot(aes(x = combo, y = percent, fill = combo)) +
+#   geom_col() +
+#   labs(y = "Proportion Using BYU Resource", x = "Condition Group") +
+#   theme_minimal()
+```
+
+```{r}
+glm6 <- glm(used_resource ~ anxiety_type * depression_type, data = full_data, family = "binomial")
+summary(glm6)
+drop1(glm6, test = "Chisq")
+
+check <- emmeans(glm6, ~ anxiety_type * depression_type, type = "response")
+emmip(check,  depression_type ~ anxiety_type)
+
+glm7 <- glm(byu_resource ~ anxiety_type * depression_type, data = full_data, family = "binomial")
+summary(glm7)
+
+drop1(glm7, test = "Chisq")
+
+check <- emmeans(glm7, ~ anxiety_type * depression_type, type = "response")
+emmip(check,  depression_type ~ anxiety_type)
+
+glm8 <- glm(non_byu_resources ~ anxiety_type * depression_type, data = full_data, family = "binomial")
+summary(glm8)
+
+drop1(glm8, test = "Chisq")
+
+check <- emmeans(glm8, ~ anxiety_type * depression_type, type = "response")
+emmip(check,  depression_type ~ anxiety_type)
+```
+
+```{r}
+# table(full_data$anxiety_type, full_data$depression_type, full_data$byu_resource)
+
+# full_data$combo <- interaction(full_data$anxiety_type, full_data$depression_type)
+# table(full_data$combo, full_data$byu_resource)
+
+# table(full_data$anxiety_type, full_data$depression_type, full_data$non_byu_resources)
+
+# full_data$combo <- interaction(full_data$anxiety_type, full_data$depression_type)
+# table(full_data$combo, full_data$non_byu_resources)
+
+# table(full_data$anxiety_type, full_data$depression_type, full_data$used_resource)
+
+# full_data$combo <- interaction(full_data$anxiety_type, full_data$depression_type)
+# table(full_data$combo, full_data$used_resource)
+```
